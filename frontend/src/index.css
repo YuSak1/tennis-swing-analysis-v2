@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme {
+  /* Court green palette */
+  --color-court-50: #f0fdf4;
+  --color-court-100: #dcfce7;
+  --color-court-200: #bbf7d0;
+  --color-court-300: #6ee7b7;
+  --color-court-400: #34d399;
+  --color-court-500: #10b981;
+  --color-court-600: #059669;
+  --color-court-700: #047857;
+  --color-court-800: #065f46;
+  --color-court-900: #064e3b;
+
+  /* Warm accent */
+  --color-ball-400: #fbbf24;
+  --color-ball-500: #f59e0b;
+
+  /* Dark surface */
+  --color-surface-50: #fafafa;
+  --color-surface-100: #f4f4f5;
+  --color-surface-200: #e4e4e7;
+  --color-surface-300: #d4d4d8;
+  --color-surface-700: #3f3f46;
+  --color-surface-800: #27272a;
+  --color-surface-900: #18181b;
+  --color-surface-950: #09090b;
+
+  /* Player colors */
+  --color-federer: #e11d48;
+  --color-nadal: #f59e0b;
+  --color-djokovic: #3b82f6;
+  --color-murray: #8b5cf6;
+}
+
+body {
+  font-family: "DM Sans", sans-serif;
+  background-color: var(--color-surface-950);
+  color: var(--color-surface-100);
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+  font-family: "Bebas Neue", sans-serif;
+}
