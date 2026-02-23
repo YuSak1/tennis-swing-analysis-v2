@@ -1,0 +1,20 @@
+# Web framework
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
+
+# ML & Computer Vision (PINNED for stability)
+tensorflow-cpu==2.15.1
+tensorflow-hub==0.15.0
+opencv-python-headless>=4.10.0
+
+# Data processing
+numpy>=1.26.0,<2.0.0
+pandas>=2.2.0
+scipy>=1.11.0,<1.14.0
+
+# Dynamic Time Warping
+dtaidistance>=2.3.0
+
+# Schema validation
+pydantic>=2.7.0
