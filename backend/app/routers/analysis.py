@@ -68,12 +68,12 @@ async def analyze_swing(
                 detail="Could not extract enough frames from the video.",
             )
 
-        # 4. Run pose detection
-        landmarks_sequence = pose_service.detect_sequence(frames, fps)
+        # 4. Run pose detection (MoveNet)
+        keypoints_sequence = pose_service.detect_sequence(frames, fps)
 
         # Check we got enough valid detections
-        valid_count = sum(1 for lm in landmarks_sequence if lm is not None)
-        if valid_count < len(landmarks_sequence) * 0.5:
+        valid_count = sum(1 for kp in keypoints_sequence if kp is not None)
+        if valid_count < len(keypoints_sequence) * 0.5:
             raise HTTPException(
                 status_code=400,
                 detail="Could not detect body pose in enough frames. "
@@ -81,7 +81,7 @@ async def analyze_swing(
             )
 
         # 5. Extract biomechanical features
-        features_df = feature_service.extract_sequence_features(landmarks_sequence)
+        features_df = feature_service.extract_sequence_features(keypoints_sequence)
 
         # 6. Detect swing phases
         phases = feature_service.detect_swing_phases(features_df)
@@ -121,15 +121,15 @@ async def analyze_swing(
             for tip in coaching_tips
         ]
 
-        # Convert landmarks for frontend visualization
-        landmarks_dict = pose_service.landmarks_to_dict_list(landmarks_sequence)
+        # Convert keypoints for frontend skeleton visualization
+        keypoints_dict = pose_service.keypoints_to_dict_list(keypoints_sequence)
 
         return AnalysisResponse(
             most_similar_player=most_similar,
             similarities=similarities,
             coaching=coaching,
             phases=SwingPhases(**phases),
-            landmarks=landmarks_dict,
+            landmarks=keypoints_dict,
             reference_video_url=f"/api/references/videos/{most_similar}",
         )
 

@@ -1,85 +1,99 @@
-import mediapipe as mp
 import numpy as np
+import tensorflow as tf
+import tensorflow_hub as hub
 
-from app.config import POSE_MODEL_PATH
 
-BaseOptions = mp.tasks.BaseOptions
-PoseLandmarker = mp.tasks.vision.PoseLandmarker
-PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
-VisionRunningMode = mp.tasks.vision.RunningMode
+# MoveNet keypoint names for reference
+KEYPOINT_NAMES = [
+    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+    "left_wrist", "right_wrist", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle",
+]
+
+INPUT_SIZE = 256
+MODEL_URL = "https://tfhub.dev/google/movenet/singlepose/thunder/4"
 
 
 class PoseService:
-    """Detects body pose landmarks using MediaPipe Pose Landmarker."""
+    """Detects body pose keypoints using MoveNet Thunder (TensorFlow Hub)."""
 
     def __init__(self):
-        self.landmarker = None
+        self.model = None
 
     def load(self):
-        """Load the MediaPipe model. Called once at app startup."""
-        options = PoseLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=str(POSE_MODEL_PATH)),
-            running_mode=VisionRunningMode.VIDEO,
-            num_poses=1,
-            min_pose_detection_confidence=0.5,
-            min_pose_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
+        """Load the MoveNet model from TF Hub. Called once at app startup."""
+        self.model = hub.load(MODEL_URL).signatures["serving_default"]
+
+    def _run_inference(self, frame: np.ndarray) -> np.ndarray:
+        """
+        Run MoveNet on a single RGB frame.
+
+        Args:
+            frame: RGB numpy array (H, W, 3)
+
+        Returns:
+            keypoints: numpy array of shape (17, 3) — [y, x, confidence]
+        """
+        img = tf.image.resize_with_pad(
+            tf.expand_dims(frame, axis=0), INPUT_SIZE, INPUT_SIZE
         )
-        self.landmarker = PoseLandmarker.create_from_options(options)
+        img = tf.cast(img, dtype=tf.int32)
+        outputs = self.model(img)
+        keypoints = outputs["output_0"].numpy()[0, 0, :, :]  # (17, 3)
+        return keypoints
 
     def detect_sequence(
         self, frames: list[np.ndarray], fps: float
-    ) -> list[list | None]:
+    ) -> list[np.ndarray | None]:
         """
         Run pose detection on a sequence of RGB frames.
 
         Args:
             frames: list of RGB numpy arrays (H, W, 3)
-            fps: frames per second (used to calculate timestamps)
+            fps: frames per second (unused for MoveNet, kept for API compat)
 
         Returns:
-            List of landmark lists (one per frame).
-            Each element is a list of 33 landmarks with x, y, z, visibility,
+            List of keypoint arrays (17, 3) with [y, x, confidence],
             or None if no pose was detected in that frame.
         """
-        if self.landmarker is None:
+        if self.model is None:
             raise RuntimeError("PoseService not loaded. Call load() first.")
 
-        landmarks_sequence = []
+        keypoints_sequence = []
 
-        for idx, frame in enumerate(frames):
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-            timestamp_ms = int(idx * 1000 / fps)
+        for frame in frames:
+            keypoints = self._run_inference(frame)
 
-            result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
-
-            if result.pose_landmarks and len(result.pose_landmarks) > 0:
-                landmarks_sequence.append(result.pose_landmarks[0])
+            # Check if enough keypoints were detected
+            avg_confidence = np.mean(keypoints[:, 2])
+            if avg_confidence > 0.1:
+                keypoints_sequence.append(keypoints)
             else:
-                landmarks_sequence.append(None)
+                keypoints_sequence.append(None)
 
-        return landmarks_sequence
+        return keypoints_sequence
 
-    def landmarks_to_dict_list(
-        self, landmarks_sequence: list
-    ) -> list[list[dict]] | None:
+    def keypoints_to_dict_list(
+        self, keypoints_sequence: list,
+    ) -> list[list[dict] | None]:
         """
-        Convert landmarks to serializable format for the frontend.
+        Convert keypoints to serializable format for the frontend.
         Used for skeleton visualization on the client side.
         """
         result = []
-        for landmarks in landmarks_sequence:
-            if landmarks is None:
+        for keypoints in keypoints_sequence:
+            if keypoints is None:
                 result.append(None)
                 continue
-            frame_landmarks = [
+            frame_kps = [
                 {
-                    "x": lm.x,
-                    "y": lm.y,
-                    "z": lm.z,
-                    "visibility": lm.visibility,
+                    "name": KEYPOINT_NAMES[i],
+                    "x": float(keypoints[i, 1]),
+                    "y": float(keypoints[i, 0]),
+                    "confidence": float(keypoints[i, 2]),
                 }
-                for lm in landmarks
+                for i in range(17)
             ]
-            result.append(frame_landmarks)
+            result.append(frame_kps)
         return result

@@ -3,15 +3,13 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 
-# MediaPipe Pose landmark indices
-L_SHOULDER, R_SHOULDER = 11, 12
-L_ELBOW, R_ELBOW = 13, 14
-L_WRIST, R_WRIST = 15, 16
-L_HIP, R_HIP = 23, 24
-L_KNEE, R_KNEE = 25, 26
-L_ANKLE, R_ANKLE = 27, 28
-L_HEEL, R_HEEL = 29, 30
-L_FOOT, R_FOOT = 31, 32
+# MoveNet keypoint indices (17 keypoints)
+L_SHOULDER, R_SHOULDER = 5, 6
+L_ELBOW, R_ELBOW = 7, 8
+L_WRIST, R_WRIST = 9, 10
+L_HIP, R_HIP = 11, 12
+L_KNEE, R_KNEE = 13, 14
+L_ANKLE, R_ANKLE = 15, 16
 
 
 def _compute_angle(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
@@ -25,20 +23,24 @@ def _compute_angle(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
 class FeatureService:
     """Extracts biomechanical features and detects swing phases."""
 
-    def extract_frame_features(self, landmarks) -> dict | None:
+    def extract_frame_features(self, keypoints: np.ndarray) -> dict | None:
         """
-        Extract biomechanical features from a single frame's landmarks.
+        Extract biomechanical features from a single frame's keypoints.
 
         Args:
-            landmarks: list of 33 MediaPipe NormalizedLandmark objects
+            keypoints: numpy array of shape (17, 3) — [y, x, confidence]
 
         Returns:
-            dict of feature_name -> value, or None if landmarks are missing
+            dict of feature_name -> value, or None if keypoints are missing
         """
-        if landmarks is None:
+        if keypoints is None:
             return None
 
-        pts = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
+        # MoveNet outputs [y, x, confidence] — convert to [x, y] for calculations
+        pts = np.zeros((17, 2))
+        pts[:, 0] = keypoints[:, 1]  # x
+        pts[:, 1] = keypoints[:, 0]  # y
+
         features = {}
 
         # --- Joint angles ---
@@ -68,8 +70,8 @@ class FeatureService:
         )
 
         # Torso rotation (angle between shoulder line and hip line)
-        shoulder_vec = pts[R_SHOULDER][:2] - pts[L_SHOULDER][:2]
-        hip_vec = pts[R_HIP][:2] - pts[L_HIP][:2]
+        shoulder_vec = pts[R_SHOULDER] - pts[L_SHOULDER]
+        hip_vec = pts[R_HIP] - pts[L_HIP]
         features["torso_rotation"] = float(
             np.degrees(
                 np.arctan2(shoulder_vec[1], shoulder_vec[0])
@@ -79,10 +81,10 @@ class FeatureService:
 
         # --- Distances ---
         features["stance_width"] = float(
-            np.linalg.norm(pts[R_ANKLE][:2] - pts[L_ANKLE][:2])
+            np.linalg.norm(pts[R_ANKLE] - pts[L_ANKLE])
         )
         features["shoulder_width"] = float(
-            np.linalg.norm(pts[R_SHOULDER][:2] - pts[L_SHOULDER][:2])
+            np.linalg.norm(pts[R_SHOULDER] - pts[L_SHOULDER])
         )
         features["r_wrist_height"] = float(
             pts[R_SHOULDER][1] - pts[R_WRIST][1]
@@ -91,7 +93,7 @@ class FeatureService:
             pts[L_SHOULDER][1] - pts[L_WRIST][1]
         )
         features["wrist_separation"] = float(
-            np.linalg.norm(pts[R_WRIST][:2] - pts[L_WRIST][:2])
+            np.linalg.norm(pts[R_WRIST] - pts[L_WRIST])
         )
 
         # --- Body center & balance ---
@@ -110,26 +112,24 @@ class FeatureService:
 
         return features
 
-    def extract_sequence_features(self, landmarks_sequence: list) -> pd.DataFrame:
+    def extract_sequence_features(self, keypoints_sequence: list) -> pd.DataFrame:
         """
-        Extract features from all frames, including velocities and accelerations.
+        Extract features from all frames, with smoothing.
 
         Args:
-            landmarks_sequence: list of landmark lists from PoseService
+            keypoints_sequence: list of (17,3) numpy arrays from PoseService
 
         Returns:
-            DataFrame with position features, velocities, and accelerations.
-            Frames where landmarks were not detected are forward-filled.
+            DataFrame with position features. Frames with no detection are skipped.
         """
         frames = []
-        for landmarks in landmarks_sequence:
-            feat = self.extract_frame_features(landmarks)
-            frames.append(feat)
+        for kp in keypoints_sequence:
+            if kp is not None:
+                feat = self.extract_frame_features(kp)
+                if feat is not None:
+                    frames.append(feat)
 
         df = pd.DataFrame(frames)
-
-        # Forward-fill missing frames (where pose detection failed)
-        df = df.ffill().bfill()
 
         # Smooth noisy signals
         for col in df.columns:
@@ -137,36 +137,23 @@ class FeatureService:
                 try:
                     df[col] = savgol_filter(df[col].values, window_length=11, polyorder=3)
                 except Exception:
-                    pass  # skip smoothing if it fails
+                    pass
 
-        # Compute velocities (first derivative)
-        df_vel = df.diff().fillna(0)
-        df_vel.columns = [f"{c}_vel" for c in df.columns]
-
-        # Compute accelerations (second derivative)
-        df_accel = df_vel.diff().fillna(0)
-        df_accel.columns = [f"{c}_accel" for c in df_vel.columns]
-
-        return pd.concat([df, df_vel, df_accel], axis=1)
+        return df
 
     def detect_swing_phases(self, features_df: pd.DataFrame) -> dict:
         """
         Detect phases of a forehand swing using wrist velocity.
 
         Returns:
-            dict with frame indices for each phase:
-            - preparation: (start, end)
-            - forward_swing: (start, end)
-            - contact: single frame index
-            - follow_through: (start, end)
-            - recovery: (start, end)
+            dict with frame indices for each phase.
         """
-        vel_col = "r_wrist_height_vel"
-        if vel_col not in features_df.columns:
+        # Compute wrist velocity from position data
+        if "r_wrist_height" not in features_df.columns:
             n = len(features_df)
             return self._default_phases(n)
 
-        wrist_vel = features_df[vel_col].values
+        wrist_vel = features_df["r_wrist_height"].diff().fillna(0).values
 
         # Smooth
         if len(wrist_vel) > 11:
